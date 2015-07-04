@@ -8,6 +8,18 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from database_setup import Base, Restaurant, MenuItem
 
+from flask import session as login_session
+from flask import make_response
+import random, string
+
+from oauth2client.client import flow_from_clientsecrets
+from oauth2client.client import FlowExchangeError
+import httplib2
+import json
+import requests
+
+CLIENT_ID = json.loads(
+    open('secrets/client_secret.json', 'r').read())['web']['client_id']
 
 engine = create_engine('sqlite:///restaurantmenu.db')
 Base.metadata.bind = engine
@@ -16,6 +28,96 @@ DBSession = sessionmaker(bind = engine)
 session = DBSession()
 
 app = Flask(__name__)
+
+@app.route('/gconnect', methods=['POST'])
+def gconnect():
+    if request.args.get('state') != login_session['state']:
+        response = make_response(json.dumps('Invalid state'), 401)
+        response.headers['Content-Type'] = 'application/json'
+        return response
+
+    code = request.data
+
+    try:
+        # Upgrade the authorization code into a credentials object
+        oauth_flow = flow_from_clientsecrets('secrets/client_secret.json', scope='')
+        oauth_flow.redirect_uri = 'postmessage'
+        credentials = oauth_flow.step2_exchange(code)
+    except FlowExchangeError:
+        response = make_response(json.dumps('Failed to upgrade the authorization code'), 401)
+        response.headers['Content-Type'] = 'application/json'
+        return response
+
+    access_token = credentials.access_token
+    print access_token
+    url = 'https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={0}'.format(access_token)
+    http = httplib2.Http()
+    result = json.loads(http.request(url, 'GET')[1])
+    # if there was an error in the access token info and abort
+    if result.get('error') is not None:
+        response = make_response(json.dumps(result.get('error')), 500)
+        response.headers['Content-Type'] = 'application/json'
+        return response
+
+    gplus_id = credentials.id_token['sub']
+    # check if id is the same and abort on mismatch
+    if result['user_id'] != gplus_id:
+        response = make_response(json.dumps("Token's user ID doesn't match given user ID."), 401)
+        response.headers['Content-Type'] = 'application/json'
+        return response
+
+    print gplus_id
+    # Verify that the access token is valid for this app.
+    if result['issued_to'] != CLIENT_ID:
+        response = make_response(
+            json.dumps("Token's client ID does not match app's."), 401)
+        print "Token's client ID does not match app's."
+        response.headers['Content-Type'] = 'application/json'
+        return response
+
+    # check if user is already logged in
+    stored_credentials = login_session.get('credentials')
+    stored_gplus_id = login_session.get('gplus_id')
+    if stored_credentials is not None and gplus_id == stored_gplus_id:
+        response = make_response(json.dumps('Current user is already connected.'), 200)
+        response.headers['Content-Type'] = 'application/json'
+        return response
+
+    # Store the access token in the session for later use.
+    login_session['credentials'] = access_token
+    login_session['gplus_id'] = gplus_id
+
+    # Get user info
+    userinfo_url = "https://www.googleapis.com/oauth2/v1/userinfo"
+    params = {'access_token': access_token, 'alt': 'json'}
+    answer = requests.get(userinfo_url, params=params)
+
+    data = answer.json()
+
+    login_session['username'] = data['name']
+    login_session['picture'] = data['picture']
+    login_session['email'] = data['email']
+
+    output = ''
+    output += '<h1>Welcome, '
+    output += login_session['username']
+    output += '!</h1>'
+    output += '<img src="'
+    output += login_session['picture']
+    output += ' " style = "width: 300px; height: 300px;border-radius: 150px;-webkit-border-radius: 150px;-moz-border-radius: 150px;"> '
+    flash("you are now logged in as {0}".format(login_session['username']))
+    print "done!"
+    return output
+
+
+# create a state token to prevent request forgery
+# store it in the session for later validation
+@app.route('/login')
+def show_login():
+    state = ''.join(random.choice(string.ascii_uppercase + string.digits)
+                    for x in xrange(32))
+    login_session['state'] = state
+    return render_template('login.html', STATE=state)
 
 # Making an api endpoint GET request
 @app.route('/restaurants/<int:restaurant_id>/menu/JSON')
@@ -61,9 +163,15 @@ def edit_restaurant(restaurant_id):
                                 restaurant_id=restaurant_id,
                                 restaurant=edited_restaurant)
 
-@app.route('/delete/<int:restaurant_id>/')
+@app.route('/delete/<int:restaurant_id>/', methods=['GET', 'POST'])
 def delete_restaurant(restaurant_id):
-    return "TODO: page to delete restaurant"
+    delete_restaurant = session.query(Restaurant).filter_by(id=restaurant_id).one()
+    if request.method == 'POST':
+        session.delete(delete_restaurant)
+        session.commit()
+        flash('Restaurant deleted!')
+        return redirect(url_for('restaurants', restaurant_id=restaurant_id))
+    return render_template('deleteRestaurant.html', restaurant=delete_restaurant)
 
 @app.route('/<int:restaurant_id>/')
 @app.route('/restaurants/<int:restaurant_id>/')

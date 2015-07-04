@@ -1,6 +1,15 @@
 <html>
     <body>
         <h1>Restaurants</h1>
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                <ul>
+                {% for message in messages %}
+                  <li><strong>{{message}}</strong></li>
+                  {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
         <a href="/new/">Create a new restaurant</a>
         {% for restaurant in restaurants %}
             <div>
