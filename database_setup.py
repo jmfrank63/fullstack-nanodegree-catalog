@@ -51,7 +51,6 @@ class MenuItem(Base):
 
     name = Column(String(80), nullable=False)
     id = Column(Integer, primary_key=True)
-
     course = Column(String(250))
     description = Column(String(250))
     price = Column(String(8))
@@ -74,6 +73,6 @@ class MenuItem(Base):
 
 ################### insert at end of file ############
 
-engine = create_engine('sqlite:///restaurantmenu.db')
+engine = create_engine('sqlite:///restaurantmenuwithusers.db')
 
 Base.metadata.create_all(engine)
